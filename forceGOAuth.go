@@ -1,11 +1,13 @@
 package forceGOAuth
 
 import (
-	//"errors"
+	"bytes"
+	"errors"
 	"fmt"
 	"encoding/json"
 	"html/template"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
@@ -29,38 +31,123 @@ type OAuthSecurity struct {
     Scope string
 }
 
-func NewOAuthSecurity()(ao *OAuthSecurity) {
-	ao = &OAuthSecurity{}
+type ForceResponse map[string]interface{}
+
+func NewOAuthSecurity()(oa *OAuthSecurity) {
+	oa = &OAuthSecurity{}
 	return
 }
 
-func (ao *OAuthSecurity) ImportSettingsJSON(settingsJson []byte) (err error) {
-	err = json.Unmarshal(settingsJson, &ao)
+func (oa *OAuthSecurity) ImportSettingsJSON(settingsJson []byte) (err error) {
+	err = json.Unmarshal(settingsJson, &oa)
 	return
 }
 
-func (ao *OAuthSecurity) ExportSettingsJSON() (settingsJson []byte, err error) {
-	settingsJson, err = json.Marshal(ao)
+func (oa *OAuthSecurity) ExportSettingsJSON() (settingsJson []byte, err error) {
+	settingsJson, err = json.Marshal(oa)
 	return
 }
 
-func (ao *OAuthSecurity) BuildAuthorizeURL()(AuthorizeURL string) {
+func (oa *OAuthSecurity) BuildAuthorizeURL()(AuthorizeURL string) {
 	var AuthURL string = "%s/authorize?response_type=code&immediate=false&client_id=%s&redirect_uri=%s"
-    return fmt.Sprintf(AuthURL, ao.OAuthBaseURL, url.QueryEscape(ao.ConsumerKey), url.QueryEscape(ao.ConsumerCallback))
+    return fmt.Sprintf(AuthURL, oa.OAuthBaseURL, url.QueryEscape(oa.ConsumerKey), url.QueryEscape(oa.ConsumerCallback))
 }
 
-func (ao *OAuthSecurity) DoFullWebflow()(err error) {
-	ao.ConsumerCallback = "http://localhost:"+PORT
+func (oa *OAuthSecurity) DoFullWebflow()(err error) {
+	oa.ConsumerCallback = "http://localhost:"+PORT
 	ch := make(chan OAuthSecurity)
 	_, err = startLocalHttpServer(ch)
-	Open(ao.BuildAuthorizeURL())
-	var out OAuthSecurity 
-	out = <-ch
-	fmt.Printf("Returned: %s\n", out.AccessToken)
+	Open(oa.BuildAuthorizeURL())
+	var out OAuthSecurity = <-ch
+	if out.AuthCode == "" {
+		err = errors.New("AuthCode was not recieved from Salesforce")
+		return
+	}
+	oa.AuthCode = out.AuthCode
+	err = oa.GetAccessToken("authorization_code")
 	return
 }
 
+func (oa *OAuthSecurity) GetAccessToken(GrantType string) (err error) {  
+    values := make(map[string]string)
+    myUrl := fmt.Sprintf("%s/token", oa.OAuthBaseURL)
 
+    values["grant_type"] = GrantType
+    if GrantType == "refresh_token" {
+        values["refresh_token"] = oa.RefreshToken
+    }
+    if GrantType == "authorization_code" {
+        values["code"] = oa.AuthCode   
+        values["redirect_uri"] = oa.ConsumerCallback
+    }
+    values["client_id"] = oa.ConsumerKey
+    values["client_secret"] = oa.ConsumerSecret
+    values["format"] = "json"
+    var res []byte
+    fmt.Printf("GetAccessToken URL=%s\n", UrlEncode(values))
+    var requestBody []byte = []byte(UrlEncode(values))
+    if res, err = oa.httpPost(myUrl, requestBody, "application/x-www-form-urlencoded"); err != nil {
+        return err
+    }   
+    var result ForceResponse
+    json.Unmarshal(res, &result) 
+    oa.AccessToken = "" 
+    for idx, val := range(result) {         
+        if idx == "access_token" {            
+            oa.AccessToken = val.(string)            
+        }
+        if idx == "instance_url" {
+            oa.InstanceUrl = val.(string)
+        }
+        if idx == "refresh_token" {
+            oa.RefreshToken = val.(string)
+        }
+    }
+    return nil
+}
+
+
+func (oa *OAuthSecurity) httpPost(theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
+
+    req, err := httpRequest("POST", theUrl, bytes.NewReader(requestBody))
+    if err != nil {
+        return
+    }
+    if oa.AccessToken != "" {
+        req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", oa.AccessToken))
+    }
+    if contentType != "" {
+    	req.Header.Add("Content-Type", contentType)
+    } else {
+    	req.Header.Add("Content-Type", "application/json")
+    }
+    res, err := httpClient().Do(req)
+    if err != nil {
+        return
+    }
+    defer res.Body.Close()
+    if res.StatusCode == 401 {
+        err = errors.New("authorization expired")
+        return
+    }
+    body, err = ioutil.ReadAll(res.Body)
+    if res.StatusCode/100 != 2 {
+     	err = errors.New(fmt.Sprintf("Status Code was not 200 (%d) - %s", res.StatusCode, CharsToString(body)))
+        return
+    }
+    return
+}
+
+func UrlEncode(attrs map[string]string) (retUrl string) {
+    retUrl = ""
+    for key, val := range(attrs) {
+        if len(retUrl) > 0 {
+            retUrl += "&"
+        }
+        retUrl += url.QueryEscape(key) + "=" + url.QueryEscape(val)
+    }    
+    return
+}
 
 func httpRequest(method, url string, body io.Reader) (request *http.Request, err error) {
     request, err = http.NewRequest(method, url, body)
@@ -76,17 +163,6 @@ func httpClient() (client *http.Client) {
     return
 }
 
-func UrlEncode(attrs map[string]string) (retUrl string) {
-    retUrl = ""
-    for key, val := range(attrs) {
-        if len(retUrl) > 0 {
-            retUrl += "&"
-        }
-        retUrl += url.QueryEscape(key) + "=" + url.QueryEscape(val)
-    }    
-    return
-}
-
 // Stolen from force.com CLI -- github.com/heroku/force
 func startLocalHttpServer(ch chan OAuthSecurity) (port int, err error) {
 	listener, err := net.Listen("tcp", ":"+PORT)
@@ -97,13 +173,9 @@ func startLocalHttpServer(ch chan OAuthSecurity) (port int, err error) {
 	h := http.NewServeMux()
 	h.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
-		var creds OAuthSecurity
-		creds.AccessToken = query.Get("access_token")
-		creds.Id = query.Get("id")
-		creds.InstanceUrl = query.Get("instance_url")
-		creds.IssuedAt = query.Get("issued_at")
-		creds.Scope = query.Get("scope")
-		ch <- creds
+		var oa OAuthSecurity
+		oa.AuthCode = query.Get("code")
+		ch <- oa
 		if _, ok := r.Header["X-Requested-With"]; ok == false {
 			// TODO -o haagen : Write close browser message here
 			PrintError(w, "You can close your browser window now")
@@ -130,6 +202,17 @@ func PrintError(w http.ResponseWriter, s string) {
     errorTemplate.Execute(w, s)    
 }
 
+func CharsToString(ca []byte) string { 
+        s := make([]byte, len(ca)) 
+        var lens int 
+        for ; lens < len(ca); lens++ { 
+                if ca[lens] == 0 { 
+                        break 
+                } 
+                s[lens] = uint8(ca[lens]) 
+        } 
+        return string(s[0:lens]) 
+} 
 
 func InitF() {
 	fmt.Println("Hello World!")
