@@ -17,6 +17,11 @@ const (
 	PORT = "8080"
 )
 
+const (
+	GrantType_AuthorizationToken = iota 
+	GrantType_RefreshToken
+)
+
 type OAuthSecurity struct {
     ConsumerKey string
     ConsumerSecret string
@@ -29,12 +34,15 @@ type OAuthSecurity struct {
     Id string
     IssuedAt string
     Scope string
+    AutoRefreshToken bool
 }
 
 type ForceResponse map[string]interface{}
 
 func NewOAuthSecurity()(oa *OAuthSecurity) {
-	oa = &OAuthSecurity{}
+	oa = &OAuthSecurity {
+		AutoRefreshToken: true,
+	}
 	return
 }
 
@@ -48,11 +56,6 @@ func (oa *OAuthSecurity) ExportSettingsJSON() (settingsJson []byte, err error) {
 	return
 }
 
-func (oa *OAuthSecurity) BuildAuthorizeURL()(AuthorizeURL string) {
-	var AuthURL string = "%s/authorize?response_type=code&immediate=false&client_id=%s&redirect_uri=%s"
-    return fmt.Sprintf(AuthURL, oa.OAuthBaseURL, url.QueryEscape(oa.ConsumerKey), url.QueryEscape(oa.ConsumerCallback))
-}
-
 func (oa *OAuthSecurity) DoFullWebflow()(err error) {
 	oa.ConsumerCallback = "http://localhost:"+PORT
 	ch := make(chan OAuthSecurity)
@@ -64,21 +67,27 @@ func (oa *OAuthSecurity) DoFullWebflow()(err error) {
 		return
 	}
 	oa.AuthCode = out.AuthCode
-	err = oa.GetAccessToken("authorization_code")
+	err = oa.GetAccessToken(GrantType_AuthorizationToken)
 	return
 }
 
-func (oa *OAuthSecurity) GetAccessToken(GrantType string) (err error) {  
+func (oa *OAuthSecurity) BuildAuthorizeURL()(AuthorizeURL string) {
+	var AuthURL string = "%s/authorize?response_type=code&immediate=false&client_id=%s&redirect_uri=%s"
+    return fmt.Sprintf(AuthURL, oa.OAuthBaseURL, url.QueryEscape(oa.ConsumerKey), url.QueryEscape(oa.ConsumerCallback))
+}
+
+func (oa *OAuthSecurity) GetAccessToken(GrantType int) (err error) {  
     values := make(map[string]string)
     myUrl := fmt.Sprintf("%s/token", oa.OAuthBaseURL)
 
-    values["grant_type"] = GrantType
-    if GrantType == "refresh_token" {
+    if GrantType == GrantType_RefreshToken {
         values["refresh_token"] = oa.RefreshToken
+        values["grant_type"] = "refresh_token"
     }
-    if GrantType == "authorization_code" {
+    if GrantType == GrantType_AuthorizationToken {
         values["code"] = oa.AuthCode   
         values["redirect_uri"] = oa.ConsumerCallback
+        values["grant_type"] = "authorization_code"
     }
     values["client_id"] = oa.ConsumerKey
     values["client_secret"] = oa.ConsumerSecret
@@ -127,7 +136,17 @@ func (oa *OAuthSecurity) httpPost(theUrl string, requestBody []byte, contentType
     }
     defer res.Body.Close()
     if res.StatusCode == 401 {
-        err = errors.New("authorization expired")
+    	if oa.AutoRefreshToken && oa.RefreshToken != "" {
+        	oa.AutoRefreshToken = false
+        	oa.AccessToken = ""
+        	err = oa.GetAccessToken(GrantType_RefreshToken)
+        	if err != nil && oa.AccessToken != "" {
+        		body, err = oa.httpPost(theUrl, requestBody, contentType)
+        	}
+			oa.AutoRefreshToken = true        	
+			return
+        }
+        err = errors.New("authorization expired - could not refresh token")
         return
     }
     body, err = ioutil.ReadAll(res.Body)
