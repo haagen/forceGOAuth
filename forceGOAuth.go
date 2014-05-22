@@ -20,7 +20,16 @@ const (
 const (
 	GrantType_AuthorizationToken = iota 
 	GrantType_RefreshToken
+	GrantType_Password
 )
+
+const (
+	OAuthFlow_WebServer = iota
+	OAuthFlow_UserAgent
+	OAuthFlow_Password
+)
+
+var HTTPClient *http.Client = nil
 
 type OAuthSecurity struct {
     ConsumerKey string
@@ -35,6 +44,8 @@ type OAuthSecurity struct {
     IssuedAt string
     Scope string
     AutoRefreshToken bool
+    UserName string
+    Password string
 }
 
 type ForceResponse map[string]interface{}
@@ -56,11 +67,11 @@ func (oa *OAuthSecurity) ExportSettingsJSON() (settingsJson []byte, err error) {
 	return
 }
 
-func (oa *OAuthSecurity) DoFullWebflow()(err error) {
+func (oa *OAuthSecurity) DoFullWebServerFlow()(err error) {
 	oa.ConsumerCallback = "http://localhost:"+PORT
 	ch := make(chan OAuthSecurity)
 	_, err = startLocalHttpServer(ch)
-	Open(oa.BuildAuthorizeURL())
+	Open(oa.BuildAuthorizeURL(OAuthFlow_WebServer))
 	var out OAuthSecurity = <-ch
 	if out.AuthCode == "" {
 		err = errors.New("AuthCode was not recieved from Salesforce")
@@ -71,9 +82,32 @@ func (oa *OAuthSecurity) DoFullWebflow()(err error) {
 	return
 }
 
-func (oa *OAuthSecurity) BuildAuthorizeURL()(AuthorizeURL string) {
-	var AuthURL string = "%s/authorize?response_type=code&immediate=false&client_id=%s&redirect_uri=%s"
-    return fmt.Sprintf(AuthURL, oa.OAuthBaseURL, url.QueryEscape(oa.ConsumerKey), url.QueryEscape(oa.ConsumerCallback))
+func (oa *OAuthSecurity) DoFullUserAgentFlow()(err error) {
+	oa.ConsumerCallback = "http://localhost:"+PORT
+	ch := make(chan OAuthSecurity)
+	_, err = startLocalHttpServer(ch)
+	Open(oa.BuildAuthorizeURL(OAuthFlow_UserAgent))
+	var out OAuthSecurity = <-ch
+	if out.AccessToken == "" {
+		err = errors.New("AccessToken was not recieved from Salesforce")
+		return
+	}
+	oa.AccessToken = out.AccessToken
+	oa.RefreshToken = out.RefreshToken
+	oa.InstanceUrl = out.InstanceUrl
+	return
+}
+
+func (oa *OAuthSecurity) BuildAuthorizeURL(OAuthFlow int)(AuthorizeURL string) {
+	if OAuthFlow_WebServer == OAuthFlow {
+		var AuthURL string = "%s/authorize?response_type=code&immediate=false&client_id=%s&redirect_uri=%s&scope=%s"
+	    AuthorizeURL = fmt.Sprintf(AuthURL, oa.OAuthBaseURL, url.QueryEscape(oa.ConsumerKey), url.QueryEscape(oa.ConsumerCallback), url.QueryEscape(oa.Scope))
+	}
+	if OAuthFlow_UserAgent == OAuthFlow {
+		var AuthURL string = "%s/authorize?response_type=token&client_id=%s&redirect_uri=%s&scope=%s"
+		AuthorizeURL = fmt.Sprintf(AuthURL, oa.OAuthBaseURL, url.QueryEscape(oa.ConsumerKey), url.QueryEscape(oa.ConsumerCallback), url.QueryEscape(oa.Scope))
+	}
+	return
 }
 
 func (oa *OAuthSecurity) GetAccessToken(GrantType int) (err error) {  
@@ -88,6 +122,11 @@ func (oa *OAuthSecurity) GetAccessToken(GrantType int) (err error) {
         values["code"] = oa.AuthCode   
         values["redirect_uri"] = oa.ConsumerCallback
         values["grant_type"] = "authorization_code"
+    }
+    if GrantType == GrantType_Password {
+    	values["username"] = oa.UserName
+    	values["password"] = oa.Password
+    	values["grant_type"] = "password"
     }
     values["client_id"] = oa.ConsumerKey
     values["client_secret"] = oa.ConsumerSecret
@@ -178,7 +217,11 @@ func httpRequest(method, url string, body io.Reader) (request *http.Request, err
 }
 
 func httpClient() (client *http.Client) {
-    client = &http.Client{}
+	if HTTPClient == nil {
+    	client = &http.Client{}
+    } else {
+    	client = HTTPClient
+    }
     return
 }
 
@@ -192,11 +235,18 @@ func startLocalHttpServer(ch chan OAuthSecurity) (port int, err error) {
 	h := http.NewServeMux()
 	h.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
+		fmt.Println(">> " + r.URL.RawQuery)
 		var oa OAuthSecurity
+		if query.Get("code") == "" {	// No AuthCode assume user-client flow			
+			u, _ := r.URL.Parse("http://server/?" + r.URL.Fragment)
+			query = u.Query()
+		}		
 		oa.AuthCode = query.Get("code")
+		oa.AccessToken = query.Get("access_token")
+		oa.RefreshToken = query.Get("refresh_token")
+		oa.InstanceUrl = query.Get("instance_url")
 		ch <- oa
 		if _, ok := r.Header["X-Requested-With"]; ok == false {
-			// TODO -o haagen : Write close browser message here
 			PrintError(w, "You can close your browser window now")
 		}
 		listener.Close()
