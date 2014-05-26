@@ -82,22 +82,6 @@ func (oa *OAuthSecurity) DoFullWebServerFlow()(err error) {
 	return
 }
 
-func (oa *OAuthSecurity) DoFullUserAgentFlow()(err error) {
-	oa.ConsumerCallback = "http://localhost:"+PORT
-	ch := make(chan OAuthSecurity)
-	_, err = startLocalHttpServer(ch)
-	Open(oa.BuildAuthorizeURL(OAuthFlow_UserAgent))
-	var out OAuthSecurity = <-ch
-	if out.AccessToken == "" {
-		err = errors.New("AccessToken was not recieved from Salesforce")
-		return
-	}
-	oa.AccessToken = out.AccessToken
-	oa.RefreshToken = out.RefreshToken
-	oa.InstanceUrl = out.InstanceUrl
-	return
-}
-
 func (oa *OAuthSecurity) BuildAuthorizeURL(OAuthFlow int)(AuthorizeURL string) {
 	if OAuthFlow_WebServer == OAuthFlow {
 		var AuthURL string = "%s/authorize?response_type=code&immediate=false&client_id=%s&redirect_uri=%s&scope=%s"
@@ -235,16 +219,8 @@ func startLocalHttpServer(ch chan OAuthSecurity) (port int, err error) {
 	h := http.NewServeMux()
 	h.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
-		fmt.Println(">> " + r.URL.RawQuery)
 		var oa OAuthSecurity
-		if query.Get("code") == "" {	// No AuthCode assume user-client flow			
-			u, _ := r.URL.Parse("http://server/?" + r.URL.Fragment)
-			query = u.Query()
-		}		
 		oa.AuthCode = query.Get("code")
-		oa.AccessToken = query.Get("access_token")
-		oa.RefreshToken = query.Get("refresh_token")
-		oa.InstanceUrl = query.Get("instance_url")
 		ch <- oa
 		if _, ok := r.Header["X-Requested-With"]; ok == false {
 			PrintError(w, "You can close your browser window now")
