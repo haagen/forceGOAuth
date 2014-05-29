@@ -42,6 +42,7 @@ type OAuthSecurity struct {
     InstanceUrl string
     Id string
     IssuedAt string
+    Signature string
     Scope string
     AutoRefreshToken bool
     UserName string
@@ -82,6 +83,11 @@ func (oa *OAuthSecurity) DoFullWebServerFlow()(err error) {
 	return
 }
 
+func (oa *OAuthSecurity) DoFullUNFlow()(err error) {
+	err = oa.GetAccessToken(GrantType_Password)
+	return
+}
+
 func (oa *OAuthSecurity) BuildAuthorizeURL(OAuthFlow int)(AuthorizeURL string) {
 	if OAuthFlow_WebServer == OAuthFlow {
 		var AuthURL string = "%s/authorize?response_type=code&immediate=false&client_id=%s&redirect_uri=%s&scope=%s"
@@ -116,7 +122,6 @@ func (oa *OAuthSecurity) GetAccessToken(GrantType int) (err error) {
     values["client_secret"] = oa.ConsumerSecret
     values["format"] = "json"
     var res []byte
-    fmt.Printf("GetAccessToken URL=%s\n", UrlEncode(values))
     var requestBody []byte = []byte(UrlEncode(values))
     if res, err = oa.httpPost(myUrl, requestBody, "application/x-www-form-urlencoded"); err != nil {
         return err
@@ -124,16 +129,21 @@ func (oa *OAuthSecurity) GetAccessToken(GrantType int) (err error) {
     var result ForceResponse
     json.Unmarshal(res, &result) 
     oa.AccessToken = "" 
-    for idx, val := range(result) {         
-        if idx == "access_token" {            
-            oa.AccessToken = val.(string)            
-        }
-        if idx == "instance_url" {
-            oa.InstanceUrl = val.(string)
-        }
-        if idx == "refresh_token" {
-            oa.RefreshToken = val.(string)
-        }
+    for idx, val := range(result) {   
+    	switch idx {
+    	case "access_token":
+    		oa.AccessToken = val.(string) 
+    	case "instance_url":
+    		oa.InstanceUrl = val.(string)
+    	case "refresh_token":
+    		oa.RefreshToken = val.(string)
+    	case "id":
+    		oa.Id = val.(string)
+    	case "issued_at":
+    		oa.IssuedAt = val.(string)
+    	case "signature":
+    		oa.Signature = val.(string)
+    	}      
     }
     return nil
 }
@@ -258,7 +268,3 @@ func CharsToString(ca []byte) string {
         } 
         return string(s[0:lens]) 
 } 
-
-func InitF() {
-	fmt.Println("Hello World!")
-}
