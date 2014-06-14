@@ -123,7 +123,7 @@ func (oa *OAuthSecurity) GetAccessToken(GrantType int) (err error) {
     values["format"] = "json"
     var res []byte
     var requestBody []byte = []byte(UrlEncode(values))
-    if res, err = oa.httpPost(myUrl, requestBody, "application/x-www-form-urlencoded"); err != nil {
+    if res, err = oa.Post(myUrl, requestBody, "application/x-www-form-urlencoded"); err != nil {
         return err
     }   
     var result ForceResponse
@@ -148,10 +148,25 @@ func (oa *OAuthSecurity) GetAccessToken(GrantType int) (err error) {
     return nil
 }
 
+func (oa *OAuthSecurity) Post(theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
+    return oa.httpGo("POST", theUrl, requestBody, contentType)
+}
 
-func (oa *OAuthSecurity) httpPost(theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
+func (oa *OAuthSecurity) Get(theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
+    return oa.httpGo("GET", theUrl, requestBody, contentType)
+}
 
-    req, err := httpRequest("POST", theUrl, bytes.NewReader(requestBody))
+func (oa *OAuthSecurity) Patch(theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
+    return oa.httpGo("PATCH", theUrl, requestBody, contentType)
+}
+
+func (oa *OAuthSecurity) Delete(theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
+    return oa.httpGo("DELETE", theUrl, requestBody, contentType)
+}
+
+func (oa *OAuthSecurity) httpGo(method string, theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
+
+    req, err := httpRequest(method, theUrl, bytes.NewReader(requestBody))
     if err != nil {
         return
     }
@@ -174,7 +189,7 @@ func (oa *OAuthSecurity) httpPost(theUrl string, requestBody []byte, contentType
         	oa.AccessToken = ""
         	err = oa.GetAccessToken(GrantType_RefreshToken)
         	if err != nil && oa.AccessToken != "" {
-        		body, err = oa.httpPost(theUrl, requestBody, contentType)
+        		body, err = oa.httpGo(method, theUrl, requestBody, contentType)
         	}
 			oa.AutoRefreshToken = true        	
 			return
@@ -233,7 +248,7 @@ func startLocalHttpServer(ch chan OAuthSecurity) (port int, err error) {
 		oa.AuthCode = query.Get("code")
 		ch <- oa
 		if _, ok := r.Header["X-Requested-With"]; ok == false {
-			PrintError(w, "You can close your browser window now")
+			PrintSuccess(w, "You can close your browser window now")
 		}
 		listener.Close()
 	})
@@ -241,20 +256,20 @@ func startLocalHttpServer(ch chan OAuthSecurity) (port int, err error) {
 	return
 }
 
-var errorTemplate = template.Must(template.New("error").Parse(`
+var outputTemplate = template.Must(template.New("error").Parse(`
 <html>
   <head>
-    <title>Error</title>
+    <title>Success</title>
   </head>
   <body>
-    <h1>An error occured</h1>
+    <h1>Success</h1>
     <pre>{{.}}</pre>
   </body>
   </html>
 `))
 
-func PrintError(w http.ResponseWriter, s string) {
-    errorTemplate.Execute(w, s)    
+func PrintSuccess(w http.ResponseWriter, s string) {
+    outputTemplate.Execute(w, s)
 }
 
 func CharsToString(ca []byte) string { 
