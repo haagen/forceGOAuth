@@ -152,21 +152,25 @@ func (oa *OAuthSecurity) Post(theUrl string, requestBody []byte, contentType str
     return oa.httpGo("POST", theUrl, requestBody, contentType)
 }
 
-func (oa *OAuthSecurity) Get(theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
-    return oa.httpGo("GET", theUrl, requestBody, contentType)
+func (oa *OAuthSecurity) Get(theUrl string, contentType string) (body []byte, err error) {
+    return oa.httpGo("GET", theUrl, nil, contentType)
 }
 
 func (oa *OAuthSecurity) Patch(theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
     return oa.httpGo("PATCH", theUrl, requestBody, contentType)
 }
 
-func (oa *OAuthSecurity) Delete(theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
-    return oa.httpGo("DELETE", theUrl, requestBody, contentType)
+func (oa *OAuthSecurity) Delete(theUrl string, contentType string) (body []byte, err error) {
+    return oa.httpGo("DELETE", theUrl, nil, contentType)
 }
 
 func (oa *OAuthSecurity) httpGo(method string, theUrl string, requestBody []byte, contentType string) (body []byte, err error) {
-
-    req, err := httpRequest(method, theUrl, bytes.NewReader(requestBody))
+    var req *http.Request
+    if requestBody == nil {
+        req, err = httpRequest(method, theUrl, nil)
+    } else {
+        req, err = httpRequest(method, theUrl, bytes.NewReader(requestBody))
+    }
     if err != nil {
         return
     }
