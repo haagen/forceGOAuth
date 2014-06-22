@@ -143,6 +143,8 @@ func (oa *OAuthSecurity) GetAccessToken(GrantType int) (err error) {
 			oa.IssuedAt = val.(string)
 		case "signature":
 			oa.Signature = val.(string)
+		case "scope":
+			oa.Scope = val.(string)
 		}
 	}
 	return nil
@@ -188,11 +190,15 @@ func (oa *OAuthSecurity) httpGo(method string, theUrl string, requestBody []byte
 	}
 	defer res.Body.Close()
 	if res.StatusCode == 401 {
-		if oa.AutoRefreshToken && oa.RefreshToken != "" {
+		if oa.AutoRefreshToken && (oa.RefreshToken != "" || (oa.UserName != "" && oa.Password != "")) {
 			oa.AutoRefreshToken = false
 			oa.AccessToken = ""
-			err = oa.GetAccessToken(GrantType_RefreshToken)
-			if err != nil && oa.AccessToken != "" {
+			if oa.RefreshToken != "" {
+				err = oa.GetAccessToken(GrantType_RefreshToken)
+			} else {
+				err = oa.GetAccessToken(GrantType_Password)
+			}
+			if err == nil && oa.AccessToken != "" {
 				body, err = oa.httpGo(method, theUrl, requestBody, contentType)
 			}
 			oa.AutoRefreshToken = true
